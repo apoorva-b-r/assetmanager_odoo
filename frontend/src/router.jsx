@@ -1,3 +1,4 @@
+import React from 'react'; // 👈 Add this line right at the very top!
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import AppShell from "./layouts/AppShell";
@@ -9,14 +10,15 @@ import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 import OrgSetup from "./pages/OrgSetup";
 import Assets from "./pages/Assets";
+import AssetHistory from "./pages/AssetHistory";
 
-// Frontend B placeholder imports
-import Allocation from "./pages/Allocation";
-import Booking from "./pages/Booking";
-import Maintenance from "./pages/Maintenance";
-import Audit from "./pages/Audit";
-import Reports from "./pages/Reports";
-import Notifications from "./pages/Notifications";
+// Frontend B page imports
+import Allocation from "./pages/allocationPage";
+import Booking from "./pages/bookingPage";
+import Maintenance from "./pages/maintenancePage";
+import Audit from "./pages/auditPage";
+import Reports from "./pages/reportPage";
+import Notifications from "./pages/notifications";
 
 
 export const router = createBrowserRouter([
@@ -57,6 +59,10 @@ export const router = createBrowserRouter([
       {
         path: "assets",
         element: <Assets />,
+      },
+      {
+        path: "assets/:id",
+        element: <AssetHistory />,
       },
 
       // Frontend B routes

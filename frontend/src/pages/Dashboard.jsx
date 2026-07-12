@@ -111,8 +111,18 @@ export default function Dashboard() {
         {summary.recentActivity?.length ? (
           <ul className="space-y-2">
             {summary.recentActivity.map((item, i) => (
-              <li key={i} className="text-sm text-slate-600 border-b last:border-0 pb-2">
-                {item.description || JSON.stringify(item)}
+              <li key={item.id || i} className="text-sm text-slate-600 border-b last:border-0 pb-2">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-medium text-slate-800">{item.action}</p>
+                    <p className="text-xs text-slate-500">
+                      {item.entityType} {item.entityId}
+                    </p>
+                  </div>
+                  <span className="text-xs text-slate-400 whitespace-nowrap">
+                    {item.timestamp ? new Date(item.timestamp).toLocaleString() : ""}
+                  </span>
+                </div>
               </li>
             ))}
           </ul>

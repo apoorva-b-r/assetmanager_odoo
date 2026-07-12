@@ -20,7 +20,10 @@ const prisma = new PrismaClient();
 const app = express();
 
 // Apply global middleware
-app.use(cors());
+app.use(cors({
+  origin: true,
+  credentials: true,
+}));
 app.use(express.json());
 
 // Mount routers

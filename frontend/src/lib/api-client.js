@@ -46,6 +46,7 @@ async function request(path, options = {}) {
       code: payload.code || "UNKNOWN_ERROR",
       message: payload.message || "Something went wrong.",
       status: response.status,
+      data: payload.data,
     };
   }
 

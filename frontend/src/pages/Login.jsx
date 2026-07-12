@@ -1,12 +1,16 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { apiClient } from "../lib/api-client";
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { refreshUser } = useAuth();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const createdAccount = location.state?.createdAccount;
 
   function handleChange(e) {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -18,6 +22,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       await apiClient.post("/auth/login", form);
+      await refreshUser();
       navigate("/dashboard");
     } catch (err) {
       setError(err.message || "Invalid email or password.");
@@ -33,6 +38,12 @@ export default function Login() {
         className="w-full max-w-sm bg-white p-8 rounded-lg shadow-sm border"
       >
         <h1 className="text-2xl font-bold mb-6">Log in to AssetFlow</h1>
+
+        {createdAccount && (
+          <div className="mb-4 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">
+            Account created successfully. Please log in.
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">

@@ -1,18 +1,10 @@
-import { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { apiClient } from "../lib/api-client";
+import { useAuth } from "../context/AuthContext";
 
 export default function ProtectedRoute({ children }) {
-  const [status, setStatus] = useState("loading"); // loading | authed | unauthed
+  const { user, loading } = useAuth();
 
-  useEffect(() => {
-    apiClient
-      .get("/auth/me")
-      .then(() => setStatus("authed"))
-      .catch(() => setStatus("unauthed"));
-  }, []);
-
-  if (status === "loading") {
+  if (loading) {
     return (
       <div className="flex h-screen items-center justify-center text-slate-500">
         Loading...
@@ -20,7 +12,7 @@ export default function ProtectedRoute({ children }) {
     );
   }
 
-  if (status === "unauthed") {
+  if (!user) {
     return <Navigate to="/login" replace />;
   }
 

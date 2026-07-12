@@ -1,8 +1,8 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { sign } = require('../services/jwt');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -138,7 +138,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Keep JWT payload minimal (userId only as per requirement)
-    const token = jwt.sign(
+    const token = sign(
       { userId: user.id },
       process.env.JWT_SECRET || 'af_jwt_secret_token_123_456',
       { expiresIn: '24h' }

@@ -20,7 +20,7 @@ export default function Signup() {
     setSubmitting(true);
     try {
       await apiClient.post("/auth/signup", form);
-      navigate("/dashboard");
+      navigate("/login", { state: { createdAccount: true, email: form.email } });
     } catch (err) {
       if (err.code === "VALIDATION_ERROR" && err.fields) {
         setFieldErrors(err.fields);

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { apiClient } from "../lib/api-client";
+import { useAuth } from "../context/AuthContext";
 
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard" },
@@ -15,10 +15,11 @@ const NAV_ITEMS = [
 
 export default function AppShell() {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   async function handleLogout() {
     try {
-      await apiClient.post("/auth/logout");
+      await logout();
     } finally {
       navigate("/login");
     }
@@ -26,19 +27,15 @@ export default function AppShell() {
 
   return (
     <div className="flex h-screen">
-      <aside className="w-60 bg-slate-900 text-white flex flex-col">
-        <div className="px-4 py-4 text-lg font-bold border-b border-slate-700">
-          AssetFlow
-        </div>
+      <aside className="flex w-60 flex-col bg-slate-900 text-white">
+        <div className="border-b border-slate-700 px-4 py-4 text-lg font-bold">AssetFlow</div>
         <nav className="flex-1 overflow-y-auto">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               className={({ isActive }) =>
-                `block px-4 py-3 text-sm hover:bg-slate-800 ${
-                  isActive ? "bg-slate-800 font-medium" : ""
-                }`
+                `block px-4 py-3 text-sm hover:bg-slate-800 ${isActive ? "bg-slate-800 font-medium" : ""}`
               }
             >
               {item.label}
@@ -46,13 +43,18 @@ export default function AppShell() {
           ))}
         </nav>
       </aside>
-      <div className="flex-1 flex flex-col">
-        <header className="h-14 border-b flex items-center justify-between px-6">
-          <span className="font-medium">AssetFlow</span>
-          <button
-            onClick={handleLogout}
-            className="text-sm text-slate-600 hover:text-slate-900"
-          >
+
+      <div className="flex flex-1 flex-col">
+        <header className="flex h-14 items-center justify-between border-b px-6">
+          <div className="flex items-center gap-3">
+            <span className="font-medium">AssetFlow</span>
+            {user && (
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                {user.name} - {user.role}
+              </span>
+            )}
+          </div>
+          <button onClick={handleLogout} className="text-sm text-slate-600 hover:text-slate-900">
             Log out
           </button>
         </header>

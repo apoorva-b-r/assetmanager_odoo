@@ -1,5 +1,5 @@
-const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
+const { verify } = require('../services/jwt');
 
 const prisma = new PrismaClient();
 
@@ -32,7 +32,7 @@ const authenticate = async (req, res, next) => {
     }
 
     // Verify token using JWT_SECRET
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'af_jwt_secret_token_123_456');
+    const decoded = verify(token, process.env.JWT_SECRET || 'af_jwt_secret_token_123_456');
 
     if (!decoded.userId) {
       return res.status(401).json({
