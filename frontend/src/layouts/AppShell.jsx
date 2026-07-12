@@ -17,6 +17,13 @@ export default function AppShell() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
+  const filteredNavItems = NAV_ITEMS.filter((item) => {
+    if (item.to === "/org-setup") {
+      return user?.role === "ADMIN";
+    }
+    return true;
+  });
+
   async function handleLogout() {
     try {
       await logout();
@@ -30,7 +37,7 @@ export default function AppShell() {
       <aside className="flex w-60 flex-col bg-slate-900 text-white">
         <div className="border-b border-slate-700 px-4 py-4 text-lg font-bold">AssetFlow</div>
         <nav className="flex-1 overflow-y-auto">
-          {NAV_ITEMS.map((item) => (
+          {filteredNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

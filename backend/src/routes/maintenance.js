@@ -6,6 +6,7 @@ const {
   createMaintenanceRequest,
   listMaintenanceRequests,
   rejectMaintenanceRequest,
+  startMaintenanceRequest,
   resolveMaintenanceRequest,
 } = require("../services/maintenanceService");
 const { authenticate, requireRole } = require("../middleware/auth");
@@ -71,6 +72,15 @@ router.put("/:id/reject", requireRole("ASSET_MANAGER"), async (req, res) => {
 router.put("/:id/assign-technician", requireRole("ASSET_MANAGER"), async (req, res) => {
   try {
     const maintenanceRequest = await assignTechnician(req.params.id, req.body ?? {}, req.user?.id);
+    return res.json({ success: true, data: { maintenanceRequest } });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+router.put("/:id/start", requireRole("ASSET_MANAGER"), async (req, res) => {
+  try {
+    const maintenanceRequest = await startMaintenanceRequest(req.params.id, req.user?.id);
     return res.json({ success: true, data: { maintenanceRequest } });
   } catch (error) {
     return sendError(res, error);

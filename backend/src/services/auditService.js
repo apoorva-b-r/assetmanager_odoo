@@ -109,6 +109,37 @@ async function createAuditCycle(payload, actorId) {
 
   const auditorIds = Array.isArray(payload.auditorIds) ? payload.auditorIds.filter(Boolean) : [];
 
+  // Find assets in location
+  let where = {};
+  if (payload.scopeLocation) {
+    where.location = { equals: payload.scopeLocation, mode: 'insensitive' };
+  }
+  
+  let assets = await prisma.asset.findMany({ where });
+
+  // If department filter is set, filter assets by active allocation
+  if (payload.scopeDepartmentId) {
+    const activeAllocations = await prisma.allocation.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [
+          { departmentId: payload.scopeDepartmentId },
+          { employee: { departmentId: payload.scopeDepartmentId } }
+        ]
+      },
+      select: { assetId: true }
+    });
+    const allocatedAssetIds = new Set(activeAllocations.map(a => a.assetId));
+    assets = assets.filter(asset => allocatedAssetIds.has(asset.id));
+  }
+
+  const defaultAuditorId = auditorIds[0] || actorId;
+  const auditItemsData = assets.map(asset => ({
+    assetId: asset.id,
+    auditorId: defaultAuditorId,
+    verificationStatus: 'PENDING',
+  }));
+
   const cycle = await prisma.auditCycle.create({
     data: {
       name: payload.name,
@@ -122,6 +153,9 @@ async function createAuditCycle(payload, actorId) {
             connect: auditorIds.map((id) => ({ id })),
           }
         : undefined,
+      auditItems: auditItemsData.length ? {
+        create: auditItemsData
+      } : undefined
     },
     select: auditCycleSelect,
   });
@@ -278,6 +312,13 @@ async function closeAuditCycle(cycleId, actorId) {
       await tx.asset.update({
         where: { id: item.assetId },
         data: { status: 'LOST' },
+      });
+    }
+
+    for (const item of damagedItems) {
+      await tx.asset.update({
+        where: { id: item.assetId },
+        data: { condition: 'DAMAGED' },
       });
     }
 

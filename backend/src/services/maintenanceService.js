@@ -134,10 +134,16 @@ async function approveMaintenanceRequest(requestId, actorId) {
       throw createError(400, "INVALID_STATE", "Maintenance request is already in a terminal state.");
     }
 
+    // Select deterministic technician from controlled pool
+    const technicians = ["Alex Carter", "Jordan Vance", "Taylor Morgan", "Sam Elliott"];
+    const sum = requestId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const assignedTechnician = technicians[sum % technicians.length];
+
     const updatedRequest = await tx.maintenanceRequest.update({
       where: { id: requestId },
       data: {
-        status: 'APPROVED',
+        status: 'TECHNICIAN_ASSIGNED',
+        technicianName: assignedTechnician,
         decidedById: actorId,
       },
       select: maintenanceSelect,
@@ -160,9 +166,10 @@ async function approveMaintenanceRequest(requestId, actorId) {
   });
 
   await Promise.all([
-    notify(result.request.raisedById, 'MAINTENANCE_APPROVED', `Maintenance approved for ${result.asset.tag || result.asset.name}.`, result.request.id),
+    notify(result.request.raisedById, 'MAINTENANCE_APPROVED', `Maintenance approved and technician assigned for ${result.asset.tag || result.asset.name}.`, result.request.id),
     logActivity(actorId, 'MAINTENANCE_APPROVED', 'MaintenanceRequest', result.request.id, {
       assetId: result.request.assetId,
+      technicianName: result.request.technicianName,
     }),
   ]);
 
@@ -246,6 +253,41 @@ async function assignTechnician(requestId, payload, actorId) {
   return result;
 }
 
+async function startMaintenanceRequest(requestId, actorId) {
+  const result = await prisma.$transaction(async (tx) => {
+    const request = await tx.maintenanceRequest.findUnique({
+      where: { id: requestId },
+      select: maintenanceSelect,
+    });
+
+    if (!request) {
+      throw createError(404, "NOT_FOUND", "Maintenance request not found.");
+    }
+
+    if (request.status !== 'TECHNICIAN_ASSIGNED') {
+      throw createError(400, "INVALID_STATE", "Maintenance request must be in TECHNICIAN_ASSIGNED state to start work.");
+    }
+
+    return tx.maintenanceRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'IN_PROGRESS',
+        decidedById: actorId,
+      },
+      select: maintenanceSelect,
+    });
+  });
+
+  await Promise.all([
+    notify(result.raisedById, 'MAINTENANCE_IN_PROGRESS', `Maintenance started for ${result.asset.tag || result.asset.name}.`, result.id),
+    logActivity(actorId, 'MAINTENANCE_IN_PROGRESS', 'MaintenanceRequest', result.id, {
+      assetId: result.assetId,
+    }),
+  ]);
+
+  return result;
+}
+
 async function resolveMaintenanceRequest(requestId, actorId) {
   const result = await prisma.$transaction(async (tx) => {
     const request = await tx.maintenanceRequest.findUnique({
@@ -318,5 +360,6 @@ module.exports = {
   approveMaintenanceRequest,
   rejectMaintenanceRequest,
   assignTechnician,
+  startMaintenanceRequest,
   resolveMaintenanceRequest,
 };

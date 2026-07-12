@@ -10,6 +10,18 @@ const TABS = [
 
 export default function OrgSetup() {
   const { isAdmin } = useAuth();
+
+  if (!isAdmin) {
+    return (
+      <div className="p-8 min-h-screen">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center text-red-700 max-w-lg mx-auto shadow-sm">
+          <h2 className="text-lg font-bold">Access Denied</h2>
+          <p className="mt-2 text-sm">You must be an Administrator to access the Organization Setup workspace.</p>
+        </div>
+      </div>
+    );
+  }
+
   const [activeTab, setActiveTab] = useState("departments");
   const [departments, setDepartments] = useState([]);
   const [categories, setCategories] = useState([]);

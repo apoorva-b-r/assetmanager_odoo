@@ -48,7 +48,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.put("/:id/cancel", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
+router.put("/:id/cancel", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
   try {
     const booking = await cancelBooking(req.params.id, req.user);
     return res.json({ success: true, data: { booking } });
@@ -57,7 +57,7 @@ router.put("/:id/cancel", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), asy
   }
 });
 
-router.put("/:id/reschedule", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
+router.put("/:id/reschedule", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
   try {
     const booking = await rescheduleBooking(req.params.id, req.body ?? {}, req.user);
     return res.json({ success: true, data: { booking } });

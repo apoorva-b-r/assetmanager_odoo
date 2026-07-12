@@ -6,8 +6,8 @@ const { sanitizeUser } = require('./auth');
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// GET /api/employees (ADMIN only)
-router.get('/', authenticate, requireRole('ADMIN'), async (req, res) => {
+// GET /api/employees (ADMIN, ASSET_MANAGER, DEPT_HEAD)
+router.get('/', authenticate, requireRole('ADMIN', 'ASSET_MANAGER', 'DEPT_HEAD'), async (req, res) => {
   try {
     const { department, role } = req.query;
     const where = {};
