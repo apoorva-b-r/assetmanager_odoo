@@ -6,16 +6,10 @@ const {
   listBookings,
   rescheduleBooking,
 } = require("../services/bookingService");
-
-let requireRole = () => (req, res, next) => next();
-
-try {
-  ({ requireRole } = require("../middleware/auth"));
-} catch (error) {
-  void error;
-}
+const { authenticate, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
+router.use(authenticate);
 
 function sendError(res, error) {
   const status = error instanceof ApiError ? error.status : 500;
@@ -30,18 +24,18 @@ function sendError(res, error) {
   return res.status(status).json(response);
 }
 
-router.post("/bookings", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const booking = createBooking(req.body ?? {});
+    const booking = await createBooking(req.body ?? {}, req.user?.id);
     return res.status(201).json({ success: true, data: { booking } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.get("/bookings", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const bookings = listBookings(req.query ?? {});
+    const bookings = await listBookings(req.query ?? {});
     return res.json({
       success: true,
       data: {
@@ -54,18 +48,18 @@ router.get("/bookings", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "A
   }
 });
 
-router.put("/bookings/:id/cancel", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.put("/:id/cancel", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
   try {
-    const booking = cancelBooking(req.params.id);
+    const booking = await cancelBooking(req.params.id, req.user?.id);
     return res.json({ success: true, data: { booking } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.put("/bookings/:id/reschedule", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.put("/:id/reschedule", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
   try {
-    const booking = rescheduleBooking(req.params.id, req.body ?? {});
+    const booking = await rescheduleBooking(req.params.id, req.body ?? {}, req.user?.id);
     return res.json({ success: true, data: { booking } });
   } catch (error) {
     return sendError(res, error);
