@@ -179,7 +179,10 @@ async function createBooking(payload, actorId) {
   return booking;
 }
 
-async function cancelBooking(bookingId, actorId) {
+async function cancelBooking(bookingId, actor) {
+  const actorId = actor?.id;
+  const actorRole = actor?.role;
+
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
     select: bookingSelect,
@@ -187,6 +190,14 @@ async function cancelBooking(bookingId, actorId) {
 
   if (!booking) {
     throw createError(404, "NOT_FOUND", "Booking not found.");
+  }
+
+  // Authorization: Only owner or ASSET_MANAGER/ADMIN can cancel
+  const isAssetManagerOrAdmin = actorRole === 'ASSET_MANAGER' || actorRole === 'ADMIN';
+  const isOwner = booking.bookedById === actorId;
+
+  if (!isAssetManagerOrAdmin && !isOwner) {
+    throw createError(403, "UNAUTHORIZED_ROLE", "You are not authorized to cancel this booking.");
   }
 
   const updatedBooking = await prisma.booking.update({
@@ -209,7 +220,9 @@ async function cancelBooking(bookingId, actorId) {
   return updatedBooking;
 }
 
-async function rescheduleBooking(bookingId, payload, actorId) {
+async function rescheduleBooking(bookingId, payload, actor) {
+  const actorId = actor?.id;
+
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
     select: bookingSelect,
@@ -217,6 +230,13 @@ async function rescheduleBooking(bookingId, payload, actorId) {
 
   if (!booking) {
     throw createError(404, "NOT_FOUND", "Booking not found.");
+  }
+
+  // Authorization: Only owner can reschedule
+  const isOwner = booking.bookedById === actorId;
+
+  if (!isOwner) {
+    throw createError(403, "UNAUTHORIZED_ROLE", "You are not authorized to reschedule this booking.");
   }
 
   const startTime = toDate(payload?.startTime);

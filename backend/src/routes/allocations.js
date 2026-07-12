@@ -52,7 +52,7 @@ router.post(
   requireRole("ASSET_MANAGER", "EMPLOYEE", "DEPT_HEAD", "ADMIN"),
   async (req, res) => {
     try {
-      const allocation = await returnAllocation(req.params.id, req.body ?? {}, req.user?.id);
+      const allocation = await returnAllocation(req.params.id, req.body ?? {}, req.user);
       return res.json({ success: true, data: { allocation } });
     } catch (error) {
       return sendError(res, error);

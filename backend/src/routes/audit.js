@@ -24,7 +24,7 @@ function sendError(res, error) {
   return res.status(status).json(response);
 }
 
-router.post("/", async (req, res) => {
+router.post("/", requireRole("ADMIN"), async (req, res) => {
   try {
     const auditCycle = await createAuditCycle(req.body ?? {}, req.user?.id);
     return res.status(201).json({ success: true, data: { auditCycle } });
