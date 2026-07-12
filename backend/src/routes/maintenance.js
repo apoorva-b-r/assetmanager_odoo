@@ -8,16 +8,10 @@ const {
   rejectMaintenanceRequest,
   resolveMaintenanceRequest,
 } = require("../services/maintenanceService");
-
-let requireRole = () => (req, res, next) => next();
-
-try {
-  ({ requireRole } = require("../middleware/auth"));
-} catch (error) {
-  void error;
-}
+const { authenticate, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
+router.use(authenticate);
 
 function sendError(res, error) {
   const status = error instanceof ApiError ? error.status : 500;
@@ -32,18 +26,18 @@ function sendError(res, error) {
   return res.status(status).json(response);
 }
 
-router.post("/maintenance-requests", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const maintenanceRequest = createMaintenanceRequest(req.body ?? {});
+    const maintenanceRequest = await createMaintenanceRequest(req.body ?? {}, req.user?.id);
     return res.status(201).json({ success: true, data: { maintenanceRequest } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.get("/maintenance-requests", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const maintenanceRequests = listMaintenanceRequests(req.query ?? {});
+    const maintenanceRequests = await listMaintenanceRequests(req.query ?? {});
     return res.json({
       success: true,
       data: {
@@ -56,36 +50,36 @@ router.get("/maintenance-requests", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_
   }
 });
 
-router.put("/maintenance-requests/:id/approve", requireRole("ASSET_MANAGER"), (req, res) => {
+router.put("/:id/approve", requireRole("ASSET_MANAGER"), async (req, res) => {
   try {
-    const maintenanceRequest = approveMaintenanceRequest(req.params.id);
+    const maintenanceRequest = await approveMaintenanceRequest(req.params.id, req.user?.id);
     return res.json({ success: true, data: { maintenanceRequest } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.put("/maintenance-requests/:id/reject", requireRole("ASSET_MANAGER"), (req, res) => {
+router.put("/:id/reject", requireRole("ASSET_MANAGER"), async (req, res) => {
   try {
-    const maintenanceRequest = rejectMaintenanceRequest(req.params.id, req.body ?? {});
+    const maintenanceRequest = await rejectMaintenanceRequest(req.params.id, req.body ?? {}, req.user?.id);
     return res.json({ success: true, data: { maintenanceRequest } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.put("/maintenance-requests/:id/assign-technician", requireRole("ASSET_MANAGER"), (req, res) => {
+router.put("/:id/assign-technician", requireRole("ASSET_MANAGER"), async (req, res) => {
   try {
-    const maintenanceRequest = assignTechnician(req.params.id, req.body ?? {});
+    const maintenanceRequest = await assignTechnician(req.params.id, req.body ?? {}, req.user?.id);
     return res.json({ success: true, data: { maintenanceRequest } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.put("/maintenance-requests/:id/resolve", requireRole("ASSET_MANAGER"), (req, res) => {
+router.put("/:id/resolve", requireRole("ASSET_MANAGER"), async (req, res) => {
   try {
-    const maintenanceRequest = resolveMaintenanceRequest(req.params.id);
+    const maintenanceRequest = await resolveMaintenanceRequest(req.params.id, req.user?.id);
     return res.json({ success: true, data: { maintenanceRequest } });
   } catch (error) {
     return sendError(res, error);

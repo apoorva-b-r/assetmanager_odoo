@@ -1,4 +1,6 @@
-const { randomUUID } = require("crypto");
+const { PrismaClient } = require("@prisma/client");
+const { notify } = require("./notify");
+const { logActivity } = require("./activityLog");
 
 class ApiError extends Error {
   constructor(status, code, message, data) {
@@ -9,109 +11,303 @@ class ApiError extends Error {
   }
 }
 
-const store = {
-  requests: [],
+const prisma = new PrismaClient();
+
+const maintenanceSelect = {
+  id: true,
+  issueDescription: true,
+  priority: true,
+  photoUrl: true,
+  status: true,
+  technicianName: true,
+  resolvedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  assetId: true,
+  raisedById: true,
+  decidedById: true,
+  asset: {
+    select: {
+      id: true,
+      tag: true,
+      name: true,
+      status: true,
+    },
+  },
+  raisedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      departmentId: true,
+    },
+  },
+  decidedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      departmentId: true,
+    },
+  },
 };
 
 function createError(status, code, message, data) {
   return new ApiError(status, code, message, data);
 }
 
-function listMaintenanceRequests({ status } = {}) {
-  return store.requests.filter((request) => {
-    if (status && request.status !== status) {
-      return false;
-    }
-    return true;
+async function listMaintenanceRequests({ status } = {}) {
+  const where = {};
+
+  if (status) {
+    where.status = status;
+  }
+
+  return prisma.maintenanceRequest.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    select: maintenanceSelect,
   });
 }
 
-function createMaintenanceRequest(payload) {
+async function createMaintenanceRequest(payload, actorId) {
   if (!payload || !payload.assetId || !payload.issueDescription) {
     throw createError(400, "VALIDATION_ERROR", "assetId and issueDescription are required.");
   }
 
-  const request = {
-    id: randomUUID(),
-    assetId: payload.assetId,
-    raisedById: payload.raisedById ?? null,
-    issueDescription: payload.issueDescription,
-    priority: payload.priority ?? "MEDIUM",
-    photoUrl: payload.photoUrl ?? null,
-    status: "PENDING",
-    technicianName: null,
-    decidedById: null,
-    resolvedAt: null,
-  };
-
-  store.requests.unshift(request);
-  return request;
-}
-
-function getRequest(requestId) {
-  const request = store.requests.find((item) => item.id === requestId);
-
-  if (!request) {
-    throw createError(404, "NOT_FOUND", "Maintenance request not found.");
+  if (!actorId) {
+    throw createError(401, "UNAUTHENTICATED", "Authentication required.");
   }
 
+  const request = await prisma.$transaction(async (tx) => {
+    const asset = await tx.asset.findUnique({
+      where: { id: payload.assetId },
+      select: {
+        id: true,
+        tag: true,
+        name: true,
+        status: true,
+      },
+    });
+
+    if (!asset) {
+      throw createError(404, "ASSET_NOT_FOUND", "Asset not found.");
+    }
+
+    return tx.maintenanceRequest.create({
+      data: {
+        assetId: payload.assetId,
+        issueDescription: payload.issueDescription,
+        priority: payload.priority ?? 'MEDIUM',
+        photoUrl: payload.photoUrl ?? null,
+        raisedById: actorId,
+      },
+      select: maintenanceSelect,
+    });
+  });
+
+  await Promise.all([
+    notify(actorId, 'MAINTENANCE_REQUEST_CREATED', `Maintenance request created for ${request.asset.tag || request.asset.name}.`, request.id),
+    logActivity(actorId, 'MAINTENANCE_REQUEST_CREATED', 'MaintenanceRequest', request.id, {
+      assetId: request.assetId,
+      priority: request.priority,
+    }),
+  ]);
+
   return request;
 }
 
-function approveMaintenanceRequest(requestId) {
-  const request = getRequest(requestId);
+async function approveMaintenanceRequest(requestId, actorId) {
+  const result = await prisma.$transaction(async (tx) => {
+    const request = await tx.maintenanceRequest.findUnique({
+      where: { id: requestId },
+      select: maintenanceSelect,
+    });
 
-  if (request.status !== "PENDING") {
-    throw createError(400, "INVALID_STATE", "Maintenance request is already in a terminal state.");
-  }
+    if (!request) {
+      throw createError(404, "NOT_FOUND", "Maintenance request not found.");
+    }
 
-  request.status = "APPROVED";
-  request.decidedById = null;
-  request.decidedAt = new Date().toISOString();
-  request.assetStatus = "UNDER_MAINTENANCE";
-  return request;
+    if (request.status !== 'PENDING') {
+      throw createError(400, "INVALID_STATE", "Maintenance request is already in a terminal state.");
+    }
+
+    const updatedRequest = await tx.maintenanceRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'APPROVED',
+        decidedById: actorId,
+      },
+      select: maintenanceSelect,
+    });
+
+    const updatedAsset = await tx.asset.update({
+      where: { id: request.assetId },
+      data: {
+        status: 'UNDER_MAINTENANCE',
+      },
+      select: {
+        id: true,
+        tag: true,
+        name: true,
+        status: true,
+      },
+    });
+
+    return { request: updatedRequest, asset: updatedAsset };
+  });
+
+  await Promise.all([
+    notify(result.request.raisedById, 'MAINTENANCE_APPROVED', `Maintenance approved for ${result.asset.tag || result.asset.name}.`, result.request.id),
+    logActivity(actorId, 'MAINTENANCE_APPROVED', 'MaintenanceRequest', result.request.id, {
+      assetId: result.request.assetId,
+    }),
+  ]);
+
+  return result.request;
 }
 
-function rejectMaintenanceRequest(requestId, payload) {
-  const request = getRequest(requestId);
+async function rejectMaintenanceRequest(requestId, payload, actorId) {
+  const result = await prisma.$transaction(async (tx) => {
+    const request = await tx.maintenanceRequest.findUnique({
+      where: { id: requestId },
+      select: maintenanceSelect,
+    });
 
-  if (request.status !== "PENDING") {
-    throw createError(400, "INVALID_STATE", "Maintenance request is already in a terminal state.");
-  }
+    if (!request) {
+      throw createError(404, "NOT_FOUND", "Maintenance request not found.");
+    }
 
-  request.status = "REJECTED";
-  request.rejectionReason = payload?.reason ?? null;
-  request.decidedAt = new Date().toISOString();
-  return request;
+    if (request.status !== 'PENDING') {
+      throw createError(400, "INVALID_STATE", "Maintenance request is already in a terminal state.");
+    }
+
+    return tx.maintenanceRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'REJECTED',
+        decidedById: actorId,
+      },
+      select: maintenanceSelect,
+    });
+  });
+
+  await Promise.all([
+    notify(result.raisedById, 'MAINTENANCE_REJECTED', `Maintenance rejected for ${result.asset.tag || result.asset.name}.`, result.id),
+    logActivity(actorId, 'MAINTENANCE_REJECTED', 'MaintenanceRequest', result.id, {
+      assetId: result.assetId,
+      reason: payload?.reason ?? null,
+    }),
+  ]);
+
+  return result;
 }
 
-function assignTechnician(requestId, payload) {
-  const request = getRequest(requestId);
-
+async function assignTechnician(requestId, payload, actorId) {
   if (!payload?.technicianName) {
     throw createError(400, "VALIDATION_ERROR", "technicianName is required.");
   }
 
-  if (!["APPROVED", "TECHNICIAN_ASSIGNED", "IN_PROGRESS"].includes(request.status)) {
-    throw createError(400, "INVALID_STATE", "Maintenance request cannot be assigned a technician now.");
-  }
+  const result = await prisma.$transaction(async (tx) => {
+    const request = await tx.maintenanceRequest.findUnique({
+      where: { id: requestId },
+      select: maintenanceSelect,
+    });
 
-  request.status = "TECHNICIAN_ASSIGNED";
-  request.technicianName = payload.technicianName;
-  return request;
+    if (!request) {
+      throw createError(404, "NOT_FOUND", "Maintenance request not found.");
+    }
+
+    if (!['APPROVED', 'TECHNICIAN_ASSIGNED', 'IN_PROGRESS'].includes(request.status)) {
+      throw createError(400, "INVALID_STATE", "Maintenance request cannot be assigned a technician now.");
+    }
+
+    return tx.maintenanceRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'TECHNICIAN_ASSIGNED',
+        technicianName: payload.technicianName,
+        decidedById: actorId,
+      },
+      select: maintenanceSelect,
+    });
+  });
+
+  await Promise.all([
+    notify(result.raisedById, 'MAINTENANCE_TECHNICIAN_ASSIGNED', `Technician assigned for ${result.asset.tag || result.asset.name}.`, result.id),
+    logActivity(actorId, 'MAINTENANCE_TECHNICIAN_ASSIGNED', 'MaintenanceRequest', result.id, {
+      assetId: result.assetId,
+      technicianName: payload.technicianName,
+    }),
+  ]);
+
+  return result;
 }
 
-function resolveMaintenanceRequest(requestId) {
-  const request = getRequest(requestId);
+async function resolveMaintenanceRequest(requestId, actorId) {
+  const result = await prisma.$transaction(async (tx) => {
+    const request = await tx.maintenanceRequest.findUnique({
+      where: { id: requestId },
+      select: maintenanceSelect,
+    });
 
-  if (!["APPROVED", "TECHNICIAN_ASSIGNED", "IN_PROGRESS"].includes(request.status)) {
-    throw createError(400, "INVALID_STATE", "Maintenance request cannot be resolved now.");
-  }
+    if (!request) {
+      throw createError(404, "NOT_FOUND", "Maintenance request not found.");
+    }
 
-  request.status = "RESOLVED";
-  request.resolvedAt = new Date().toISOString();
-  request.assetStatus = "AVAILABLE";
-  return request;
+    if (!['APPROVED', 'TECHNICIAN_ASSIGNED', 'IN_PROGRESS'].includes(request.status)) {
+      throw createError(400, "INVALID_STATE", "Maintenance request cannot be resolved now.");
+    }
+
+    const activeAllocation = await tx.allocation.findFirst({
+      where: {
+        assetId: request.assetId,
+        status: 'ACTIVE',
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    const nextAssetStatus = activeAllocation ? 'ALLOCATED' : 'AVAILABLE';
+
+    const updatedRequest = await tx.maintenanceRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'RESOLVED',
+        resolvedAt: new Date(),
+        decidedById: actorId,
+      },
+      select: maintenanceSelect,
+    });
+
+    const updatedAsset = await tx.asset.update({
+      where: { id: request.assetId },
+      data: {
+        status: nextAssetStatus,
+      },
+      select: {
+        id: true,
+        tag: true,
+        name: true,
+        status: true,
+      },
+    });
+
+    return { request: updatedRequest, asset: updatedAsset };
+  });
+
+  await Promise.all([
+    notify(result.request.raisedById, 'MAINTENANCE_RESOLVED', `Maintenance resolved for ${result.asset.tag || result.asset.name}.`, result.request.id),
+    logActivity(actorId, 'MAINTENANCE_RESOLVED', 'MaintenanceRequest', result.request.id, {
+      assetId: result.request.assetId,
+      assetStatus: result.asset.status,
+    }),
+  ]);
+
+  return result.request;
 }
 
 module.exports = {
