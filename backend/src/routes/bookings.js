@@ -50,7 +50,7 @@ router.get("/", async (req, res) => {
 
 router.put("/:id/cancel", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
   try {
-    const booking = await cancelBooking(req.params.id, req.user?.id);
+    const booking = await cancelBooking(req.params.id, req.user);
     return res.json({ success: true, data: { booking } });
   } catch (error) {
     return sendError(res, error);
@@ -59,7 +59,7 @@ router.put("/:id/cancel", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), asy
 
 router.put("/:id/reschedule", requireRole("EMPLOYEE", "ASSET_MANAGER", "ADMIN"), async (req, res) => {
   try {
-    const booking = await rescheduleBooking(req.params.id, req.body ?? {}, req.user?.id);
+    const booking = await rescheduleBooking(req.params.id, req.body ?? {}, req.user);
     return res.json({ success: true, data: { booking } });
   } catch (error) {
     return sendError(res, error);

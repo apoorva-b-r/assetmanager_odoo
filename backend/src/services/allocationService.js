@@ -204,7 +204,11 @@ async function createAllocation(payload, actorId) {
   return result.allocation;
 }
 
-async function returnAllocation(allocationId, payload, actorId) {
+async function returnAllocation(allocationId, payload, actor) {
+  const actorId = actor?.id;
+  const actorRole = actor?.role;
+  const actorDeptId = actor?.departmentId;
+
   const allocation = await prisma.allocation.findUnique({
     where: { id: allocationId },
     select: allocationSelect,
@@ -216,6 +220,16 @@ async function returnAllocation(allocationId, payload, actorId) {
 
   if (allocation.status !== "ACTIVE") {
     throw createError(400, "INVALID_STATE", "Allocation is not active.");
+  }
+
+  // Authorization check: ASSET_MANAGER and ADMIN may return any.
+  // EMPLOYEE / DEPT_HEAD may only return their own or department's allocation.
+  const isAssetManagerOrAdmin = actorRole === 'ASSET_MANAGER' || actorRole === 'ADMIN';
+  const isOwnEmployeeAllocation = allocation.employeeId === actorId;
+  const isOwnDepartmentAllocation = allocation.departmentId && allocation.departmentId === actorDeptId;
+
+  if (!isAssetManagerOrAdmin && !isOwnEmployeeAllocation && !isOwnDepartmentAllocation) {
+    throw createError(403, "UNAUTHORIZED_ROLE", "You are not authorized to return this allocation.");
   }
 
   const updatedAllocation = await prisma.$transaction(async (tx) => {
