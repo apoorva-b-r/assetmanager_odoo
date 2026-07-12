@@ -1,0 +1,50 @@
+const express = require('express');
+const cors = require('cors');
+const { PrismaClient } = require('@prisma/client');
+
+const prisma = new PrismaClient();
+const app = express();
+
+// Apply global middleware
+app.use(cors());
+app.use(express.json());
+
+// Health endpoint returning PostgreSQL reachability status
+const checkHealth = async (req, res) => {
+  try {
+    // Simple query to verify connection to the database
+    await prisma.$queryRaw`SELECT 1`;
+    
+    return res.status(200).json({
+      success: true,
+      data: {
+        status: 'UP',
+        database: 'connected',
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error('Health check failed:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'DATABASE_UNREACHABLE',
+      message: 'PostgreSQL database is not reachable.',
+      details: error.message,
+    });
+  }
+};
+
+app.get('/health', checkHealth);
+app.get('/api/health', checkHealth);
+
+// Express Error Handler for uncaught issues
+app.use((err, req, res, next) => {
+  console.error('Unhandled Server Error:', err);
+  return res.status(500).json({
+    success: false,
+    code: 'INTERNAL_SERVER_ERROR',
+    message: err.message || 'An unexpected error occurred.',
+  });
+});
+
+module.exports = app;
