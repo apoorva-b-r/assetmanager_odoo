@@ -1,14 +1,14 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import AppShell from "./layouts/AppShell";
-import Dashboard from "./pages/Dashboard";
-import OrgSetup from "./pages/OrgSetup";
-import Assets from "./pages/Assets";
-import Allocation from "./pages/Allocation";
-import Booking from "./pages/Booking";
-import Maintenance from "./pages/Maintenance";
-import Audit from "./pages/Audit";
-import Reports from "./pages/Reports";
-import Notifications from "./pages/Notifications";
+import Dashboard from "./pages/Dashboard"; // verify if this file name is exact
+import OrgSetup from "./pages/org_setup";
+import Assets from "./pages/asset";
+import Allocation from "./pages/allocation";
+import Booking from "./pages/booking";
+import Maintenance from "./pages/maintenance";
+import Audit from "./pages/audit";
+import Reports from "./pages/report";
+import Notifications from "./pages/notifications";
 
 export const router = createBrowserRouter([
   {
