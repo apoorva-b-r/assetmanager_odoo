@@ -7,8 +7,14 @@ const categoriesRouter = require('./routes/categories');
 const employeesRouter = require('./routes/employees');
 const allocationsRouter = require('./routes/allocations');
 const transfersRouter = require('./routes/transfers');
+const bookingsRouter = require('./routes/bookings');
+const maintenanceRouter = require('./routes/maintenance');
+const auditRouter = require('./routes/audit');
+const reportsRouter = require('./routes/reports');
 const notificationsRouter = require('./routes/notifications');
 const activityLogsRouter = require('./routes/activityLogs');
+const assetsRouter = require('./routes/assets');
+const dashboardRouter = require('./routes/dashboard');
 
 const prisma = new PrismaClient();
 const app = express();
@@ -24,8 +30,14 @@ app.use('/api/asset-categories', categoriesRouter);
 app.use('/api/employees', employeesRouter);
 app.use('/api/allocations', allocationsRouter);
 app.use('/api/transfer-requests', transfersRouter);
+app.use('/api/bookings', bookingsRouter);
+app.use('/api/maintenance-requests', maintenanceRouter);
+app.use('/api/audit-cycles', auditRouter);
+app.use('/api/reports', reportsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/activity-logs', activityLogsRouter);
+app.use('/api/assets', assetsRouter);
+app.use('/api/dashboard', dashboardRouter);
 
 // Health endpoint returning PostgreSQL reachability status
 const checkHealth = async (req, res) => {

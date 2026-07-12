@@ -1,4 +1,6 @@
-const { randomUUID } = require("crypto");
+const { PrismaClient } = require("@prisma/client");
+const { notify } = require("./notify");
+const { logActivity } = require("./activityLog");
 
 class ApiError extends Error {
   constructor(status, code, message, data) {
@@ -9,8 +11,35 @@ class ApiError extends Error {
   }
 }
 
-const store = {
-  bookings: [],
+const prisma = new PrismaClient();
+
+const bookingSelect = {
+  id: true,
+  startTime: true,
+  endTime: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+  resourceAssetId: true,
+  bookedById: true,
+  resourceAsset: {
+    select: {
+      id: true,
+      tag: true,
+      name: true,
+      isBookable: true,
+      status: true,
+    },
+  },
+  bookedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      departmentId: true,
+    },
+  },
 };
 
 function createError(status, code, message, data) {
@@ -26,26 +55,39 @@ function overlaps(newStart, newEnd, existingStart, existingEnd) {
   return newStart < existingEnd && newEnd > existingStart;
 }
 
-function listBookings({ resourceAssetId, date } = {}) {
-  return store.bookings.filter((booking) => {
-    if (resourceAssetId && booking.resourceAssetId !== resourceAssetId) {
-      return false;
-    }
+async function listBookings({ resourceAssetId, date } = {}) {
+  const where = {};
 
-    if (!date) {
-      return true;
-    }
+  if (resourceAssetId) {
+    where.resourceAssetId = resourceAssetId;
+  }
 
+  if (date) {
     const day = new Date(date);
+
     if (Number.isNaN(day.getTime())) {
-      return false;
+      throw createError(400, "VALIDATION_ERROR", "date must be a valid ISO date.");
     }
 
-    return booking.startTime.slice(0, 10) === day.toISOString().slice(0, 10);
+    const startOfDay = new Date(day);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(day);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    where.startTime = {
+      gte: startOfDay,
+      lte: endOfDay,
+    };
+  }
+
+  return prisma.booking.findMany({
+    where,
+    orderBy: { startTime: 'asc' },
+    select: bookingSelect,
   });
 }
 
-function createBooking(payload) {
+async function createBooking(payload, actorId) {
   if (!payload || !payload.resourceAssetId || !payload.startTime || !payload.endTime) {
     throw createError(400, "VALIDATION_ERROR", "resourceAssetId, startTime and endTime are required.");
   }
@@ -57,50 +99,121 @@ function createBooking(payload) {
     throw createError(400, "VALIDATION_ERROR", "startTime must be before endTime.");
   }
 
-  const conflictingBooking = store.bookings.find((booking) => {
-    if (booking.resourceAssetId !== payload.resourceAssetId) {
-      return false;
-    }
+  const bookedById = payload.bookedById || actorId;
 
-    if (booking.status === "CANCELLED") {
-      return false;
-    }
-
-    return overlaps(startTime, endTime, new Date(booking.startTime), new Date(booking.endTime));
-  });
-
-  if (conflictingBooking) {
-    throw createError(409, "BOOKING_CONFLICT", "Booking overlaps with an existing reservation.", {
-      currentBooking: conflictingBooking,
-    });
+  if (!bookedById) {
+    throw createError(400, "VALIDATION_ERROR", "bookedById is required.");
   }
 
-  const booking = {
-    id: randomUUID(),
-    resourceAssetId: payload.resourceAssetId,
-    bookedById: payload.bookedById ?? null,
-    startTime: startTime.toISOString(),
-    endTime: endTime.toISOString(),
-    status: "UPCOMING",
-  };
+  const booking = await prisma.$transaction(async (tx) => {
+    const asset = await tx.asset.findUnique({
+      where: { id: payload.resourceAssetId },
+      select: {
+        id: true,
+        tag: true,
+        name: true,
+        isBookable: true,
+        status: true,
+      },
+    });
 
-  store.bookings.unshift(booking);
+    if (!asset) {
+      throw createError(404, "ASSET_NOT_FOUND", "Bookable asset not found.");
+    }
+
+    if (!asset.isBookable) {
+      throw createError(400, "ASSET_NOT_BOOKABLE", `Asset ${asset.tag || asset.name} is not bookable.`);
+    }
+
+    const conflictingBooking = await tx.booking.findFirst({
+      where: {
+        resourceAssetId: payload.resourceAssetId,
+        status: {
+          not: 'CANCELLED',
+        },
+        AND: [
+          {
+            startTime: {
+              lt: endTime,
+            },
+          },
+          {
+            endTime: {
+              gt: startTime,
+            },
+          },
+        ],
+      },
+      select: bookingSelect,
+    });
+
+    if (conflictingBooking) {
+      throw createError(409, "BOOKING_CONFLICT", "Booking overlaps with an existing reservation.", {
+        currentBooking: conflictingBooking,
+      });
+    }
+
+    return tx.booking.create({
+      data: {
+        resourceAssetId: payload.resourceAssetId,
+        bookedById,
+        startTime,
+        endTime,
+        status: 'UPCOMING',
+      },
+      select: bookingSelect,
+    });
+  });
+
+  await Promise.all([
+    notify(bookedById, 'BOOKING_CONFIRMED', `Booking confirmed for asset ${booking.resourceAsset.tag || booking.resourceAsset.name}.`, booking.id),
+    actorId
+      ? logActivity(actorId, 'BOOKING_CREATED', 'Booking', booking.id, {
+          resourceAssetId: booking.resourceAssetId,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+        })
+      : Promise.resolve(),
+  ]);
+
   return booking;
 }
 
-function cancelBooking(bookingId) {
-  const booking = store.bookings.find((item) => item.id === bookingId);
+async function cancelBooking(bookingId, actorId) {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: bookingSelect,
+  });
 
   if (!booking) {
     throw createError(404, "NOT_FOUND", "Booking not found.");
   }
 
-  booking.status = "CANCELLED";
-  return booking;
+  const updatedBooking = await prisma.booking.update({
+    where: { id: bookingId },
+    data: {
+      status: 'CANCELLED',
+    },
+    select: bookingSelect,
+  });
+
+  if (actorId) {
+    await Promise.all([
+      notify(updatedBooking.bookedById, 'BOOKING_CANCELLED', `Booking cancelled for asset ${updatedBooking.resourceAsset.tag || updatedBooking.resourceAsset.name}.`, updatedBooking.id),
+      logActivity(actorId, 'BOOKING_CANCELLED', 'Booking', updatedBooking.id, {
+        resourceAssetId: updatedBooking.resourceAssetId,
+      }),
+    ]);
+  }
+
+  return updatedBooking;
 }
 
-function rescheduleBooking(bookingId, payload) {
-  const booking = store.bookings.find((item) => item.id === bookingId);
+async function rescheduleBooking(bookingId, payload, actorId) {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: bookingSelect,
+  });
 
   if (!booking) {
     throw createError(404, "NOT_FOUND", "Booking not found.");
@@ -113,31 +226,60 @@ function rescheduleBooking(bookingId, payload) {
     throw createError(400, "VALIDATION_ERROR", "startTime must be before endTime.");
   }
 
-  const conflictingBooking = store.bookings.find((candidate) => {
-    if (candidate.id === booking.id) {
-      return false;
+  const updatedBooking = await prisma.$transaction(async (tx) => {
+    const conflictingBooking = await tx.booking.findFirst({
+      where: {
+        resourceAssetId: booking.resourceAssetId,
+        status: {
+          not: 'CANCELLED',
+        },
+        id: {
+          not: booking.id,
+        },
+        AND: [
+          {
+            startTime: {
+              lt: endTime,
+            },
+          },
+          {
+            endTime: {
+              gt: startTime,
+            },
+          },
+        ],
+      },
+      select: bookingSelect,
+    });
+
+    if (conflictingBooking) {
+      throw createError(409, "BOOKING_CONFLICT", "Booking overlaps with an existing reservation.", {
+        currentBooking: conflictingBooking,
+      });
     }
 
-    if (candidate.resourceAssetId !== booking.resourceAssetId) {
-      return false;
-    }
-
-    if (candidate.status === "CANCELLED") {
-      return false;
-    }
-
-    return overlaps(startTime, endTime, new Date(candidate.startTime), new Date(candidate.endTime));
+    return tx.booking.update({
+      where: { id: booking.id },
+      data: {
+        startTime,
+        endTime,
+      },
+      select: bookingSelect,
+    });
   });
 
-  if (conflictingBooking) {
-    throw createError(409, "BOOKING_CONFLICT", "Booking overlaps with an existing reservation.", {
-      currentBooking: conflictingBooking,
-    });
+  if (actorId) {
+    await Promise.all([
+      notify(updatedBooking.bookedById, 'BOOKING_UPDATED', `Booking rescheduled for asset ${updatedBooking.resourceAsset.tag || updatedBooking.resourceAsset.name}.`, updatedBooking.id),
+      logActivity(actorId, 'BOOKING_RESCHEDULED', 'Booking', updatedBooking.id, {
+        resourceAssetId: updatedBooking.resourceAssetId,
+        startTime: updatedBooking.startTime,
+        endTime: updatedBooking.endTime,
+      }),
+    ]);
   }
 
-  booking.startTime = startTime.toISOString();
-  booking.endTime = endTime.toISOString();
-  return booking;
+  return updatedBooking;
 }
 
 module.exports = {

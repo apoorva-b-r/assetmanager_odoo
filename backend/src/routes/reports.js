@@ -1,71 +1,125 @@
 const express = require("express");
+const { PrismaClient } = require("@prisma/client");
+const { authenticate } = require("../middleware/auth");
 
-let requireRole = () => (req, res, next) => next();
-
-try {
-  ({ requireRole } = require("../middleware/auth"));
-} catch (error) {
-  void error;
-}
-
+const prisma = new PrismaClient();
 const router = express.Router();
+router.use(authenticate);
+
+function sendError(res, error) {
+  return res.status(500).json({
+    success: false,
+    code: "SERVER_ERROR",
+    message: error.message || "Unexpected server error.",
+  });
+}
 
 function response(res, data) {
   return res.json({ success: true, data });
 }
 
-router.get("/reports/utilization", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
-  return response(res, {
-    labels: ["IT", "HR", "Finance"],
-    values: [18, 11, 7],
-  });
+router.get("/utilization", async (req, res) => {
+  try {
+    const departments = await prisma.department.findMany({
+      select: { id: true, name: true },
+    });
+    const allocations = await prisma.allocation.findMany({
+      select: { departmentId: true },
+    });
+
+    const counts = departments.map((department) => ({
+      departmentId: department.id,
+      departmentName: department.name,
+      totalAllocations: allocations.filter((allocation) => allocation.departmentId === department.id).length,
+    }));
+
+    return response(res, counts);
+  } catch (error) {
+    return sendError(res, error);
+  }
 });
 
-router.get(
-  "/reports/maintenance-frequency",
-  requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"),
-  (req, res) => {
-    return response(res, {
-      labels: ["Laptop", "Monitor", "Conference Room"],
-      values: [5, 3, 2],
+router.get("/maintenance-frequency", async (req, res) => {
+  try {
+    const assets = await prisma.asset.findMany({
+      select: { id: true, name: true, categoryId: true },
     });
-  },
-);
+    const maintenanceRequests = await prisma.maintenanceRequest.findMany({
+      select: { assetId: true },
+    });
 
-router.get(
-  "/reports/upcoming-maintenance",
-  requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"),
-  (req, res) => {
-    return response(res, {
-      items: [
-        { id: "report-asset-1", name: "Dell Laptop", dueDate: "2026-07-15T09:00:00.000Z" },
-        { id: "report-asset-2", name: "Conference Room B2", dueDate: "2026-07-16T09:00:00.000Z" },
-      ],
-      total: 2,
-    });
-  },
-);
+    const byAsset = assets.map((asset) => ({
+      assetId: asset.id,
+      assetName: asset.name,
+      categoryId: asset.categoryId,
+      maintenanceCount: maintenanceRequests.filter((request) => request.assetId === asset.id).length,
+    }));
 
-router.get(
-  "/reports/department-allocation",
-  requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"),
-  (req, res) => {
-    return response(res, {
-      labels: ["IT", "Operations", "Sales"],
-      values: [9, 6, 4],
-    });
-  },
-);
+    return response(res, byAsset);
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
 
-router.get(
-  "/reports/booking-heatmap",
-  requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"),
-  (req, res) => {
-    return response(res, {
-      labels: ["Mon", "Tue", "Wed", "Thu", "Fri"],
-      values: [2, 4, 3, 5, 1],
+router.get("/upcoming-maintenance", async (req, res) => {
+  try {
+    const assets = await prisma.asset.findMany({
+      where: {
+        OR: [
+          { status: 'UNDER_MAINTENANCE' },
+          { condition: { contains: 'maintenance', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, tag: true, name: true, status: true, categoryId: true, location: true },
     });
-  },
-);
+
+    return response(res, {
+      items: assets.map((asset) => ({
+        id: asset.id,
+        tag: asset.tag,
+        name: asset.name,
+        status: asset.status,
+        categoryId: asset.categoryId,
+        location: asset.location,
+      })),
+      total: assets.length,
+    });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+router.get("/department-allocation", async (req, res) => {
+  try {
+    const departments = await prisma.department.findMany({ select: { id: true, name: true } });
+    const allocations = await prisma.allocation.findMany({ select: { departmentId: true } });
+
+    return response(res, departments.map((department) => ({
+      departmentId: department.id,
+      departmentName: department.name,
+      allocationCount: allocations.filter((allocation) => allocation.departmentId === department.id).length,
+    })));
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+router.get("/booking-heatmap", async (req, res) => {
+  try {
+    const bookings = await prisma.booking.findMany({ select: { startTime: true } });
+    const buckets = Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0 }));
+
+    bookings.forEach((booking) => {
+      const hour = new Date(booking.startTime).getHours();
+      if (buckets[hour]) {
+        buckets[hour].count += 1;
+      }
+    });
+
+    return response(res, buckets);
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
 
 module.exports = router;
