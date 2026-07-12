@@ -1,13 +1,19 @@
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const { PrismaClient } = require('@prisma/client');
+const authRouter = require('./routes/auth');
 
 const prisma = new PrismaClient();
 const app = express();
 
 // Apply global middleware
 app.use(cors());
+app.use(cookieParser());
 app.use(express.json());
+
+// Mount routers
+app.use('/api/auth', authRouter);
 
 // Health endpoint returning PostgreSQL reachability status
 const checkHealth = async (req, res) => {
