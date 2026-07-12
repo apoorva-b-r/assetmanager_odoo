@@ -6,16 +6,10 @@ const {
   listAuditCycles,
   verifyAuditItem,
 } = require("../services/auditService");
-
-let requireRole = () => (req, res, next) => next();
-
-try {
-  ({ requireRole } = require("../middleware/auth"));
-} catch (error) {
-  void error;
-}
+const { authenticate, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
+router.use(authenticate);
 
 function sendError(res, error) {
   const status = error instanceof ApiError ? error.status : 500;
@@ -30,18 +24,18 @@ function sendError(res, error) {
   return res.status(status).json(response);
 }
 
-router.post("/audit-cycles", requireRole("ADMIN"), (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const auditCycle = createAuditCycle(req.body ?? {});
+    const auditCycle = await createAuditCycle(req.body ?? {}, req.user?.id);
     return res.status(201).json({ success: true, data: { auditCycle } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.get("/audit-cycles", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const auditCycles = listAuditCycles(req.query ?? {});
+    const auditCycles = await listAuditCycles();
     return res.json({
       success: true,
       data: {
@@ -54,19 +48,19 @@ router.get("/audit-cycles", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER"
   }
 });
 
-router.put("/audit-items/:id/verify", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.put("/items/:id/verify", async (req, res) => {
   try {
-    const auditItem = verifyAuditItem(req.params.id, req.body ?? {});
+    const auditItem = await verifyAuditItem(req.params.id, req.body ?? {}, req.user?.id);
     return res.json({ success: true, data: { auditItem } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.put("/audit-cycles/:id/close", requireRole("ADMIN"), (req, res) => {
+router.put("/:id/close", requireRole("ADMIN"), async (req, res) => {
   try {
-    const auditCycle = closeAuditCycle(req.params.id);
-    return res.json({ success: true, data: { auditCycle } });
+    const result = await closeAuditCycle(req.params.id, req.user?.id);
+    return res.json({ success: true, data: result });
   } catch (error) {
     return sendError(res, error);
   }
