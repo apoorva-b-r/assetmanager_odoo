@@ -65,7 +65,7 @@ router.get('/', authenticate, requireRole('ADMIN'), async (req, res) => {
 });
 
 // PUT /api/employees/:id/role (ADMIN only)
-router.post = router.put('/:id/role', authenticate, requireRole('ADMIN'), async (req, res) => {
+router.put('/:id/role', authenticate, requireRole('ADMIN'), async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body;

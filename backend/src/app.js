@@ -12,6 +12,7 @@ const maintenanceRouter = require('./routes/maintenance');
 const notificationsRouter = require('./routes/notifications');
 const activityLogsRouter = require('./routes/activityLogs');
 const assetsRouter = require('./routes/assets');
+const dashboardRouter = require('./routes/dashboard');
 
 const prisma = new PrismaClient();
 const app = express();
@@ -32,6 +33,7 @@ app.use('/api/maintenance-requests', maintenanceRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/activity-logs', activityLogsRouter);
 app.use('/api/assets', assetsRouter);
+app.use('/api/dashboard', dashboardRouter);
 
 // Health endpoint returning PostgreSQL reachability status
 const checkHealth = async (req, res) => {
