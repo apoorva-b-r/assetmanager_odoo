@@ -194,4 +194,5 @@ router.get('/me', authenticate, (req, res) => {
   });
 });
 
+router.sanitizeUser = sanitizeUser;
 module.exports = router;
