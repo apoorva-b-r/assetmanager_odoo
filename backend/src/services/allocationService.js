@@ -1,4 +1,7 @@
 const { randomUUID } = require("crypto");
+const { PrismaClient } = require("@prisma/client");
+const { notify } = require("./notify");
+const { logActivity } = require("./activityLog");
 
 class ApiError extends Error {
   constructor(status, code, message, data) {
@@ -9,13 +12,59 @@ class ApiError extends Error {
   }
 }
 
+const prisma = new PrismaClient();
 const store = {
-  allocations: [],
   transferRequests: [],
+};
+
+const allocationSelect = {
+  id: true,
+  allocatedAt: true,
+  expectedReturnDate: true,
+  returnedAt: true,
+  returnCondition: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+  assetId: true,
+  employeeId: true,
+  departmentId: true,
+  asset: {
+    select: {
+      id: true,
+      tag: true,
+      name: true,
+      status: true,
+    },
+  },
+  employee: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      departmentId: true,
+    },
+  },
+  department: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
 };
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function parseDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function createError(status, code, message, data) {
@@ -23,58 +72,147 @@ function createError(status, code, message, data) {
 }
 
 function normalizeEmployee(allocation) {
+  if (allocation.employee) {
+    return {
+      id: allocation.employee.id,
+      name: allocation.employee.name,
+    };
+  }
+
+  if (allocation.department) {
+    return {
+      id: allocation.department.id,
+      name: allocation.department.name,
+    };
+  }
+
   return {
-    id: allocation.employeeId,
-    name: allocation.employeeName,
+    id: allocation.employeeId || allocation.departmentId || allocation.id,
+    name: "Current holder",
   };
 }
 
-function listAllocations({ assetId, status } = {}) {
-  return store.allocations.filter((allocation) => {
-    if (assetId && allocation.assetId !== assetId) {
-      return false;
-    }
-    if (status && allocation.status !== status) {
-      return false;
-    }
-    return true;
+async function listAllocations({ assetId, status } = {}) {
+  const where = {};
+
+  if (assetId) {
+    where.assetId = assetId;
+  }
+
+  if (status) {
+    where.status = status;
+  }
+
+  return prisma.allocation.findMany({
+    where,
+    orderBy: { allocatedAt: 'desc' },
+    select: allocationSelect,
   });
 }
 
-function createAllocation(payload) {
+async function createAllocation(payload, actorId) {
   if (!payload || !payload.assetId) {
     throw createError(400, "VALIDATION_ERROR", "assetId is required.");
   }
 
-  const existingAllocation = store.allocations.find(
-    (allocation) => allocation.assetId === payload.assetId && allocation.status === "ACTIVE",
-  );
-
-  if (existingAllocation) {
-    throw createError(409, "ALLOCATION_CONFLICT", "Asset is already allocated.", {
-      currentHolder: normalizeEmployee(existingAllocation),
-    });
+  if (!payload.employeeId && !payload.departmentId) {
+    throw createError(400, "VALIDATION_ERROR", "employeeId or departmentId is required.");
   }
 
-  const allocation = {
-    id: randomUUID(),
-    assetId: payload.assetId,
-    employeeId: payload.employeeId ?? null,
-    employeeName: payload.employeeName ?? "Mock Employee",
-    departmentId: payload.departmentId ?? null,
-    allocatedAt: nowIso(),
-    expectedReturnDate: payload.expectedReturnDate ?? null,
-    returnedAt: null,
-    returnCondition: null,
-    status: "ACTIVE",
-  };
+  if (payload.employeeId && payload.departmentId) {
+    throw createError(400, "VALIDATION_ERROR", "Provide either employeeId or departmentId, not both.");
+  }
 
-  store.allocations.unshift(allocation);
-  return allocation;
+  const expectedReturnDate = parseDate(payload.expectedReturnDate);
+
+  if (!expectedReturnDate) {
+    throw createError(400, "VALIDATION_ERROR", "expectedReturnDate must be a valid ISO date.");
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const asset = await tx.asset.findUnique({
+      where: { id: payload.assetId },
+      select: {
+        id: true,
+        tag: true,
+        name: true,
+        status: true,
+      },
+    });
+
+    if (!asset) {
+      throw createError(404, "ASSET_NOT_FOUND", "Asset not found.");
+    }
+
+    const existingAllocation = await tx.allocation.findFirst({
+      where: {
+        assetId: payload.assetId,
+        status: 'ACTIVE',
+      },
+      select: allocationSelect,
+    });
+
+    if (existingAllocation) {
+      throw createError(409, "ALLOCATION_CONFLICT", "Asset is already allocated.", {
+        currentHolder: normalizeEmployee(existingAllocation),
+      });
+    }
+
+    if (asset.status !== 'AVAILABLE') {
+      throw createError(409, "ASSET_NOT_AVAILABLE", `Asset ${asset.tag || asset.name} is currently ${asset.status}.`, {
+        assetId: asset.id,
+        assetStatus: asset.status,
+      });
+    }
+
+    const allocation = await tx.allocation.create({
+      data: {
+        assetId: payload.assetId,
+        employeeId: payload.employeeId ?? null,
+        departmentId: payload.departmentId ?? null,
+        expectedReturnDate,
+        status: 'ACTIVE',
+      },
+      select: allocationSelect,
+    });
+
+    await tx.asset.update({
+      where: { id: asset.id },
+      data: {
+        status: 'ALLOCATED',
+      },
+    });
+
+    return { allocation, asset };
+  });
+
+  const recipientIds = new Set([actorId]);
+  if (payload.employeeId) {
+    recipientIds.add(payload.employeeId);
+  }
+
+  const message = `Asset ${result.asset.tag || result.asset.name} allocated successfully.`;
+
+  await Promise.all([
+    ...Array.from(recipientIds).filter(Boolean).map((userId) => notify(userId, 'ASSET_ASSIGNED', message, result.allocation.id)),
+    actorId
+      ? logActivity(actorId, 'ASSET_ALLOCATED', 'Allocation', result.allocation.id, {
+          assetId: result.asset.id,
+          assetTag: result.asset.tag,
+          employeeId: payload.employeeId ?? null,
+          departmentId: payload.departmentId ?? null,
+        })
+      : Promise.resolve(),
+  ]);
+
+  return result.allocation;
 }
 
-function returnAllocation(allocationId, payload) {
-  const allocation = store.allocations.find((item) => item.id === allocationId);
+async function returnAllocation(allocationId, payload, actorId) {
+  const allocation = await prisma.allocation.findUnique({
+    where: { id: allocationId },
+    select: allocationSelect,
+  });
 
   if (!allocation) {
     throw createError(404, "NOT_FOUND", "Allocation not found.");
@@ -84,10 +222,38 @@ function returnAllocation(allocationId, payload) {
     throw createError(400, "INVALID_STATE", "Allocation is not active.");
   }
 
-  allocation.status = "RETURNED";
-  allocation.returnedAt = nowIso();
-  allocation.returnCondition = payload?.returnCondition ?? null;
-  return allocation;
+  const updatedAllocation = await prisma.$transaction(async (tx) => {
+    const nextAllocation = await tx.allocation.update({
+      where: { id: allocationId },
+      data: {
+        status: 'RETURNED',
+        returnedAt: new Date(),
+        returnCondition: payload?.returnCondition ?? null,
+      },
+      select: allocationSelect,
+    });
+
+    await tx.asset.update({
+      where: { id: allocation.assetId },
+      data: {
+        status: 'AVAILABLE',
+      },
+    });
+
+    return nextAllocation;
+  });
+
+  if (actorId) {
+    await Promise.all([
+      notify(actorId, 'ASSET_RETURNED', `Allocation ${updatedAllocation.id} was returned.`, updatedAllocation.id),
+      logActivity(actorId, 'ASSET_RETURNED', 'Allocation', updatedAllocation.id, {
+        assetId: updatedAllocation.assetId,
+        allocationId: updatedAllocation.id,
+      }),
+    ]);
+  }
+
+  return updatedAllocation;
 }
 
 function listTransferRequests({ status } = {}) {
@@ -95,6 +261,7 @@ function listTransferRequests({ status } = {}) {
     if (status && request.status !== status) {
       return false;
     }
+
     return true;
   });
 }

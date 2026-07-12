@@ -5,16 +5,10 @@ const {
   listAllocations,
   returnAllocation,
 } = require("../services/allocationService");
-
-let requireRole = () => (req, res, next) => next();
-
-try {
-  ({ requireRole } = require("../middleware/auth"));
-} catch (error) {
-  void error;
-}
+const { authenticate, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
+router.use(authenticate);
 
 function sendError(res, error) {
   const status = error instanceof ApiError ? error.status : 500;
@@ -29,18 +23,18 @@ function sendError(res, error) {
   return res.status(status).json(response);
 }
 
-router.post("/allocations", requireRole("ASSET_MANAGER", "DEPT_HEAD"), (req, res) => {
+router.post("/", requireRole("ASSET_MANAGER", "DEPT_HEAD"), async (req, res) => {
   try {
-    const allocation = createAllocation(req.body ?? {});
+    const allocation = await createAllocation(req.body ?? {}, req.user?.id);
     return res.status(201).json({ success: true, data: { allocation } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.get("/allocations", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const allocations = listAllocations(req.query ?? {});
+    const allocations = await listAllocations(req.query ?? {});
     return res.json({
       success: true,
       data: {
@@ -54,11 +48,11 @@ router.get("/allocations", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER",
 });
 
 router.post(
-  "/allocations/:id/return",
+  "/:id/return",
   requireRole("ASSET_MANAGER", "EMPLOYEE", "DEPT_HEAD", "ADMIN"),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const allocation = returnAllocation(req.params.id, req.body ?? {});
+      const allocation = await returnAllocation(req.params.id, req.body ?? {}, req.user?.id);
       return res.json({ success: true, data: { allocation } });
     } catch (error) {
       return sendError(res, error);
