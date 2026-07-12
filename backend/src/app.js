@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const { PrismaClient } = require('@prisma/client');
 const authRouter = require('./routes/auth');
 const departmentsRouter = require('./routes/departments');
@@ -9,12 +10,14 @@ const allocationsRouter = require('./routes/allocations');
 const transfersRouter = require('./routes/transfers');
 const notificationsRouter = require('./routes/notifications');
 const activityLogsRouter = require('./routes/activityLogs');
+const assetsRouter = require('./routes/assets');
 
 const prisma = new PrismaClient();
 const app = express();
 
 // Apply global middleware
 app.use(cors());
+app.use(cookieParser());
 app.use(express.json());
 
 // Mount routers
@@ -26,6 +29,7 @@ app.use('/api/allocations', allocationsRouter);
 app.use('/api/transfer-requests', transfersRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/activity-logs', activityLogsRouter);
+app.use('/api/assets', assetsRouter);
 
 // Health endpoint returning PostgreSQL reachability status
 const checkHealth = async (req, res) => {
