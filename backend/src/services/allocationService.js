@@ -1,4 +1,3 @@
-const { randomUUID } = require("crypto");
 const { PrismaClient } = require("@prisma/client");
 const { notify } = require("./notify");
 const { logActivity } = require("./activityLog");
@@ -13,9 +12,6 @@ class ApiError extends Error {
 }
 
 const prisma = new PrismaClient();
-const store = {
-  transferRequests: [],
-};
 
 const allocationSelect = {
   id: true,
@@ -256,99 +252,403 @@ async function returnAllocation(allocationId, payload, actorId) {
   return updatedAllocation;
 }
 
-function listTransferRequests({ status } = {}) {
-  return store.transferRequests.filter((request) => {
-    if (status && request.status !== status) {
-      return false;
-    }
+async function listTransferRequests({ status } = {}) {
+  const where = {};
 
-    return true;
+  if (status) {
+    where.status = status;
+  }
+
+  return prisma.transferRequest.findMany({
+    where,
+    orderBy: { requestedAt: 'desc' },
+    select: {
+      id: true,
+      reason: true,
+      status: true,
+      requestedAt: true,
+      updatedAt: true,
+      assetId: true,
+      fromUserId: true,
+      toUserId: true,
+      decidedById: true,
+      asset: {
+        select: {
+          id: true,
+          tag: true,
+          name: true,
+        },
+      },
+      fromUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+      toUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+      decidedBy: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+    },
   });
 }
 
-function createTransferRequest(payload) {
+async function createTransferRequest(payload, actorId) {
   if (!payload || !payload.assetId || !payload.toUserId) {
     throw createError(400, "VALIDATION_ERROR", "assetId and toUserId are required.");
   }
 
-  const transferRequest = {
-    id: randomUUID(),
-    assetId: payload.assetId,
-    fromUserId: payload.fromUserId ?? null,
-    fromUserName: payload.fromUserName ?? "Current Holder",
-    toUserId: payload.toUserId,
-    toUserName: payload.toUserName ?? "Requested User",
-    reason: payload.reason ?? "",
-    status: "REQUESTED",
-    requestedAt: nowIso(),
-    decidedById: null,
-  };
+  const currentAllocation = await prisma.allocation.findFirst({
+    where: {
+      assetId: payload.assetId,
+      status: 'ACTIVE',
+    },
+    select: allocationSelect,
+  });
 
-  store.transferRequests.unshift(transferRequest);
+  const transferRequest = await prisma.transferRequest.create({
+    data: {
+      assetId: payload.assetId,
+      fromUserId: currentAllocation?.employeeId || payload.fromUserId || actorId,
+      toUserId: payload.toUserId,
+      reason: payload.reason,
+    },
+    select: {
+      id: true,
+      reason: true,
+      status: true,
+      requestedAt: true,
+      updatedAt: true,
+      assetId: true,
+      fromUserId: true,
+      toUserId: true,
+      decidedById: true,
+    },
+  });
+
+  if (actorId) {
+    await logActivity(actorId, 'TRANSFER_REQUESTED', 'TransferRequest', transferRequest.id, {
+      assetId: payload.assetId,
+      toUserId: payload.toUserId,
+    });
+  }
+
   return transferRequest;
 }
 
-function approveTransferRequest(transferRequestId) {
-  const transferRequest = store.transferRequests.find((request) => request.id === transferRequestId);
+async function approveTransferRequest(transferRequestId, actorId) {
+  const result = await prisma.$transaction(async (tx) => {
+    const transferRequest = await tx.transferRequest.findUnique({
+      where: { id: transferRequestId },
+      select: {
+        id: true,
+        assetId: true,
+        fromUserId: true,
+        toUserId: true,
+        reason: true,
+        status: true,
+        requestedAt: true,
+        updatedAt: true,
+        decidedById: true,
+        asset: {
+          select: {
+            id: true,
+            tag: true,
+            name: true,
+            status: true,
+          },
+        },
+        fromUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            departmentId: true,
+          },
+        },
+        toUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            departmentId: true,
+          },
+        },
+      },
+    });
 
-  if (!transferRequest) {
-    throw createError(404, "NOT_FOUND", "Transfer request not found.");
+    if (!transferRequest) {
+      throw createError(404, "NOT_FOUND", "Transfer request not found.");
+    }
+
+    if (transferRequest.status !== 'REQUESTED') {
+      throw createError(400, "INVALID_STATE", "Transfer request is not pending.");
+    }
+
+    const currentAllocation = await tx.allocation.findFirst({
+      where: {
+        assetId: transferRequest.assetId,
+        status: 'ACTIVE',
+      },
+      select: allocationSelect,
+    });
+
+    if (!currentAllocation) {
+      throw createError(409, "ALLOCATION_CONFLICT", "Asset has already been returned or reallocated.", {
+        currentHolder: transferRequest.fromUser
+          ? {
+              id: transferRequest.fromUser.id,
+              name: transferRequest.fromUser.name,
+            }
+          : null,
+      });
+    }
+
+    if (currentAllocation.employeeId && transferRequest.fromUserId && currentAllocation.employeeId !== transferRequest.fromUserId) {
+      throw createError(409, "ALLOCATION_CONFLICT", "Allocation holder changed before transfer approval.", {
+        currentHolder: normalizeEmployee(currentAllocation),
+      });
+    }
+
+    const returnedAllocation = await tx.allocation.update({
+      where: { id: currentAllocation.id },
+      data: {
+        status: 'RETURNED',
+        returnedAt: new Date(),
+        returnCondition: 'TRANSFERRED',
+      },
+      select: allocationSelect,
+    });
+
+    const newAllocation = await tx.allocation.create({
+      data: {
+        assetId: transferRequest.assetId,
+        employeeId: transferRequest.toUserId,
+        expectedReturnDate: currentAllocation.expectedReturnDate,
+        status: 'ACTIVE',
+      },
+      select: allocationSelect,
+    });
+
+    await tx.asset.update({
+      where: { id: transferRequest.assetId },
+      data: {
+        status: 'ALLOCATED',
+      },
+    });
+
+    const updatedTransferRequest = await tx.transferRequest.update({
+      where: { id: transferRequest.id },
+      data: {
+        status: 'APPROVED',
+        decidedById: actorId ?? null,
+      },
+      select: {
+        id: true,
+        reason: true,
+        status: true,
+        requestedAt: true,
+        updatedAt: true,
+        assetId: true,
+        fromUserId: true,
+        toUserId: true,
+        decidedById: true,
+        asset: {
+          select: {
+            id: true,
+            tag: true,
+            name: true,
+          },
+        },
+        fromUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            departmentId: true,
+          },
+        },
+        toUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            departmentId: true,
+          },
+        },
+        decidedBy: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            departmentId: true,
+          },
+        },
+      },
+    });
+
+    return {
+      transferRequest: updatedTransferRequest,
+      oldAllocation: returnedAllocation,
+      allocation: newAllocation,
+      asset: transferRequest.asset,
+    };
+  });
+
+  if (actorId) {
+    await Promise.all([
+      notify(result.transferRequest.toUserId, 'TRANSFER_APPROVED', `Transfer approved for ${result.asset.tag || result.asset.name}.`, result.transferRequest.id),
+      notify(result.oldAllocation.employeeId || actorId, 'TRANSFER_APPROVED', `Transfer approved for ${result.asset.tag || result.asset.name}.`, result.transferRequest.id),
+      logActivity(actorId, 'TRANSFER_APPROVED', 'TransferRequest', result.transferRequest.id, {
+        assetId: result.asset.id,
+        oldAllocationId: result.oldAllocation.id,
+        newAllocationId: result.allocation.id,
+        toUserId: result.transferRequest.toUserId,
+      }),
+    ]);
   }
-
-  if (transferRequest.status !== "REQUESTED") {
-    throw createError(400, "INVALID_STATE", "Transfer request is not pending.");
-  }
-
-  const currentAllocation = store.allocations.find(
-    (allocation) => allocation.assetId === transferRequest.assetId && allocation.status === "ACTIVE",
-  );
-
-  if (currentAllocation) {
-    currentAllocation.status = "RETURNED";
-    currentAllocation.returnedAt = nowIso();
-    currentAllocation.returnCondition = "TRANSFERRED";
-  }
-
-  const newAllocation = {
-    id: randomUUID(),
-    assetId: transferRequest.assetId,
-    employeeId: transferRequest.toUserId,
-    employeeName: transferRequest.toUserName,
-    departmentId: null,
-    allocatedAt: nowIso(),
-    expectedReturnDate: null,
-    returnedAt: null,
-    returnCondition: null,
-    status: "ACTIVE",
-  };
-
-  store.allocations.unshift(newAllocation);
-
-  transferRequest.status = "APPROVED";
-  transferRequest.decidedById = null;
-  transferRequest.decidedAt = nowIso();
-  transferRequest.resultAllocationId = newAllocation.id;
 
   return {
-    transferRequest,
-    allocation: newAllocation,
+    transferRequest: result.transferRequest,
+    allocation: result.allocation,
   };
 }
 
-function rejectTransferRequest(transferRequestId) {
-  const transferRequest = store.transferRequests.find((request) => request.id === transferRequestId);
+async function rejectTransferRequest(transferRequestId, actorId) {
+  const transferRequest = await prisma.transferRequest.findUnique({
+    where: { id: transferRequestId },
+    select: {
+      id: true,
+      reason: true,
+      status: true,
+      requestedAt: true,
+      updatedAt: true,
+      assetId: true,
+      fromUserId: true,
+      toUserId: true,
+      decidedById: true,
+      asset: {
+        select: {
+          id: true,
+          tag: true,
+          name: true,
+        },
+      },
+      fromUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+      toUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+    },
+  });
 
   if (!transferRequest) {
     throw createError(404, "NOT_FOUND", "Transfer request not found.");
   }
 
-  if (transferRequest.status !== "REQUESTED") {
+  if (transferRequest.status !== 'REQUESTED') {
     throw createError(400, "INVALID_STATE", "Transfer request is not pending.");
   }
 
-  transferRequest.status = "REJECTED";
-  transferRequest.decidedAt = nowIso();
-  return transferRequest;
+  const updatedTransferRequest = await prisma.transferRequest.update({
+    where: { id: transferRequestId },
+    data: {
+      status: 'REJECTED',
+      decidedById: actorId ?? null,
+    },
+    select: {
+      id: true,
+      reason: true,
+      status: true,
+      requestedAt: true,
+      updatedAt: true,
+      assetId: true,
+      fromUserId: true,
+      toUserId: true,
+      decidedById: true,
+      asset: {
+        select: {
+          id: true,
+          tag: true,
+          name: true,
+        },
+      },
+      fromUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+      toUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+      decidedBy: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          departmentId: true,
+        },
+      },
+    },
+  });
+
+  if (actorId) {
+    await Promise.all([
+      notify(updatedTransferRequest.toUserId, 'TRANSFER_REJECTED', `Transfer rejected for ${updatedTransferRequest.asset.tag || updatedTransferRequest.asset.name}.`, updatedTransferRequest.id),
+      logActivity(actorId, 'TRANSFER_REJECTED', 'TransferRequest', updatedTransferRequest.id, {
+        assetId: updatedTransferRequest.assetId,
+        toUserId: updatedTransferRequest.toUserId,
+      }),
+    ]);
+  }
+
+  return updatedTransferRequest;
 }
 
 module.exports = {

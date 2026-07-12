@@ -6,6 +6,7 @@ const departmentsRouter = require('./routes/departments');
 const categoriesRouter = require('./routes/categories');
 const employeesRouter = require('./routes/employees');
 const allocationsRouter = require('./routes/allocations');
+const transfersRouter = require('./routes/transfers');
 const notificationsRouter = require('./routes/notifications');
 const activityLogsRouter = require('./routes/activityLogs');
 
@@ -22,6 +23,7 @@ app.use('/api/departments', departmentsRouter);
 app.use('/api/asset-categories', categoriesRouter);
 app.use('/api/employees', employeesRouter);
 app.use('/api/allocations', allocationsRouter);
+app.use('/api/transfer-requests', transfersRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/activity-logs', activityLogsRouter);
 

@@ -6,16 +6,10 @@ const {
   listTransferRequests,
   rejectTransferRequest,
 } = require("../services/allocationService");
-
-let requireRole = () => (req, res, next) => next();
-
-try {
-  ({ requireRole } = require("../middleware/auth"));
-} catch (error) {
-  void error;
-}
+const { authenticate, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
+router.use(authenticate);
 
 function sendError(res, error) {
   const status = error instanceof ApiError ? error.status : 500;
@@ -30,18 +24,18 @@ function sendError(res, error) {
   return res.status(status).json(response);
 }
 
-router.post("/transfer-requests", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const transferRequest = createTransferRequest(req.body ?? {});
+    const transferRequest = await createTransferRequest(req.body ?? {}, req.user?.id);
     return res.status(201).json({ success: true, data: { transferRequest } });
   } catch (error) {
     return sendError(res, error);
   }
 });
 
-router.get("/transfer-requests", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MANAGER", "ADMIN"), (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const transferRequests = listTransferRequests(req.query ?? {});
+    const transferRequests = await listTransferRequests(req.query ?? {});
     return res.json({
       success: true,
       data: {
@@ -55,11 +49,11 @@ router.get("/transfer-requests", requireRole("EMPLOYEE", "DEPT_HEAD", "ASSET_MAN
 });
 
 router.put(
-  "/transfer-requests/:id/approve",
+  "/:id/approve",
   requireRole("ASSET_MANAGER", "DEPT_HEAD"),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const result = approveTransferRequest(req.params.id);
+      const result = await approveTransferRequest(req.params.id, req.user?.id);
       return res.json({ success: true, data: result });
     } catch (error) {
       return sendError(res, error);
@@ -68,11 +62,11 @@ router.put(
 );
 
 router.put(
-  "/transfer-requests/:id/reject",
+  "/:id/reject",
   requireRole("ASSET_MANAGER", "DEPT_HEAD"),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const transferRequest = rejectTransferRequest(req.params.id);
+      const transferRequest = await rejectTransferRequest(req.params.id, req.user?.id);
       return res.json({ success: true, data: { transferRequest } });
     } catch (error) {
       return sendError(res, error);
